@@ -1,10 +1,10 @@
 (ns alicia.core
-  (:require [qbits.hayt.cql :as cql])
+  (:require [qbits.hayt.cql :as cql]
+            [alicia.codec :as codec])
   (:import [com.datastax.oss.driver.api.core CqlIdentifier CqlSession]
            [com.datastax.oss.driver.api.core.cql ResultSet Row SimpleStatement]
-           [com.datastax.oss.driver.api.core.type DataType DataTypes]
+           [com.datastax.oss.driver.api.core.type DataType DataTypes ListType MapType SetType]
            [com.datastax.oss.driver.api.core.type.codec TypeCodec TypeCodecs]
-           [com.datastax.oss.driver.internal.core.type DefaultListType DefaultMapType DefaultSetType]
            [java.util.function Function]))
 
 (defn- primitive-data-type->type-codec [^DataType dt]
@@ -34,20 +34,24 @@
   (if-let [tc (primitive-data-type->type-codec dt)]
     tc
     (cond
-      (instance? DefaultMapType dt)   (TypeCodecs/mapOf (primitive-data-type->type-codec (.getKeyType ^DefaultMapType dt))
-                                                        (primitive-data-type->type-codec (.getValueType ^DefaultMapType dt)))
-      (instance? DefaultSetType dt)   (TypeCodecs/setOf (primitive-data-type->type-codec (.getElementType ^DefaultSetType dt)))
-      (instance? DefaultListType dt)  (TypeCodecs/setOf (primitive-data-type->type-codec (.getElementType ^DefaultListType dt)))
+      (instance? MapType dt)  (codec/map-of   (primitive-data-type->type-codec (.getKeyType ^MapType dt))
+                                              (primitive-data-type->type-codec (.getValueType ^MapType dt)))
+
+      (instance? SetType dt)  (codec/set-of   (primitive-data-type->type-codec (.getElementType ^SetType dt)))
+
+      (instance? ListType dt) (codec/list-of  (primitive-data-type->type-codec (.getElementType ^ListType dt)))
+
       :else (throw (IllegalArgumentException. (str "unknown data type: " dt))))))
 
 (def ^:private transform-row
   (reify Function
     (apply [_ row]
-      (let [name-type (into [] (map (fn [cd] [(.getName cd) (.getType cd)])) (.getColumnDefinitions ^Row row))]
-        (reduce (fn [accum [n t]]
-                  (assoc accum (keyword (.asInternal n)) (.get ^Row row ^CqlIdentifier n ^TypeCodec (data-type->type-codec t))))
-                {}
-                name-type)))))
+      (into {}
+            (comp
+              (map (fn [cd] [(.getName cd) (.getType cd)]))
+              (map (fn [[n t]] [(keyword (.asInternal n))
+                                (.get ^Row row ^CqlIdentifier n ^TypeCodec (data-type->type-codec t))])))
+            (.getColumnDefinitions ^Row row)))))
 
 (defn- transform [^ResultSet rs]
   (.map rs transform-row))

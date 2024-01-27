@@ -6,6 +6,16 @@
            [java.nio ByteBuffer]
            [java.util List Map Set]))
 
+(defn- decode-element [^ByteBuffer input ^TypeCodec tc protoVersion]
+  (let [elem-size (.getInt input)
+        e (if (< elem-size 0)
+            nil
+            (let [encoded-e (doto (.slice input) (.limit elem-size))
+                  e (.decode tc encoded-e protoVersion)]
+              (.position input (+ elem-size (.position input)))
+              e))]
+    e))
+
 (defn- clj-map-codec [^DataType cqlType ^TypeCodec keyCodec ^TypeCodec valueCodec]
   (let [java-type (GenericType/mapOf (.getJavaType keyCodec) (.getJavaType valueCodec))]
     (reify TypeCodec
@@ -37,7 +47,7 @@
                                           4
                                           (.remaining encoded-val))))
                              members))
-                result (doto (ByteBuffer/allocate to-alloc) (.putInt (count val)))]
+                ^ByteBuffer result (doto (ByteBuffer/allocate to-alloc) (.putInt (count val)))]
 
             (doseq [encoded-elem encoded-elems]
               (.putInt result (.remaining encoded-elem))
@@ -45,29 +55,17 @@
             (.flip result)
             result)))
       (decode [_ bytes protoVersion]
-        (if (or (nil? bytes) (zero? (.remaining ^ByteBuffer bytes)))
-          {}
-          (let [input (.duplicate bytes)
-                size  (.getInt input)]
-            (loop [counter 0
-                   result (transient {})]
-              (if (= counter size)
-                (persistent! result)
-                (let [key-size (.getInt input)
-                      k (if (< key-size 0)
-                          nil
-                          (let [encoded-k (doto (.slice input) (.limit key-size))
-                                key (.decode keyCodec encoded-k protoVersion)]
-                            (.position input (+ key-size (.position input)))
-                            key))
-                      val-size (.getInt input)
-                      v (if (< val-size 0)
-                          nil
-                          (let [encoded-v (doto (.slice input) (.limit val-size))
-                                val (.decode valueCodec encoded-v protoVersion)]
-                            (.position input (+ val-size (.position input)))
-                            val))]
-                  (recur (inc counter) (assoc! result k v))))))))
+              (if (or (nil? bytes) (zero? (.remaining ^ByteBuffer bytes)))
+                {}
+                (let [input (.duplicate bytes)
+                      size  (.getInt input)]
+                  (loop [counter 0
+                         result (transient {})]
+                    (if (= counter size)
+                      (persistent! result)
+                      (let [k (decode-element input keyCodec protoVersion)
+                            v (decode-element input valueCodec protoVersion)]
+                        (recur (inc counter) (assoc! result k v))))))))
       (format [_ value] (str value))
       (parse [_ value]  (edn/read-string value)))))
 
@@ -96,20 +94,14 @@
 
 (defn- decode-helper [bytes protoVersion ^TypeCodec elemCodec empty-coll]
   (if (or (nil? bytes) (zero? (.remaining ^ByteBuffer bytes)))
-    {}
+    empty-coll
     (let [input (.duplicate bytes)
-          size  (.getInt input)]
+          num-elems  (.getInt input)]
       (loop [counter 0
              result (transient empty-coll)]
-        (if (= counter size)
+        (if (= counter num-elems)
           (persistent! result)
-          (let [elem-size (.getInt input)
-                e (if (< elem-size 0)
-                    nil
-                    (let [encoded-e (doto (.slice input) (.limit elem-size))
-                          elem (.decode elemCodec encoded-e protoVersion)]
-                      (.position input (+ elem-size (.position input)))
-                      elem))]
+          (let [e (decode-element input elemCodec protoVersion)]
             (recur (inc counter) (conj! result e))))))))
 
 (defn- clj-set-codec [^DataType cqlType ^TypeCodec elemCodec]

@@ -43,26 +43,34 @@
    :serial ConsistencyLevel/SERIAL
    :local-serial ConsistencyLevel/LOCAL_SERIAL})
 
+(def ^:private batch-lookup
+  {:logged BatchType/LOGGED
+   :unlogged BatchType/UNLOGGED
+   :counter BatchType/COUNTER})
+
 (defn- simple-query? [query]
   (or (map? query)
       (string? query)))
 
 (defn- ^Statement query->stmt [query consistency]
   (cond
-    (map? query)
-    (.setConsistencyLevel (SimpleStatement/newInstance (cql/->raw query)) consistency)
-
-    (string? query)
-    (.setConsistencyLevel (SimpleStatement/newInstance query) consistency)
-
-    (coll? query)
-    (let [stmt-builder (BatchStatementBuilder. BatchType/LOGGED)]
-      (doseq [q query]
+    (and (map? query)
+         (contains? batch-lookup (:batch query))
+         (coll? (:queries query)))
+    (let [stmt-builder (BatchStatementBuilder. ^BatchType (get batch-lookup (:batch query)))
+          queries (:queries query)]
+      (doseq [q queries]
         (.addStatement stmt-builder (if (simple-query? q)
                                       (query->stmt q consistency)
                                       (throw (ex-info "invalid nested batch query" {:query query})))))
       (.setConsistencyLevel stmt-builder consistency)
       (.build stmt-builder))
+
+    (map? query)
+    (.setConsistencyLevel (SimpleStatement/newInstance (cql/->raw query)) consistency)
+
+    (string? query)
+    (.setConsistencyLevel (SimpleStatement/newInstance query) consistency)
 
     :else
     (throw (IllegalArgumentException. (str "unknown query format: " (type query) " " query)))))

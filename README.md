@@ -94,3 +94,26 @@ CREATE TABLE foobar.example_table (
 
 INSERT INTO example_table (id,rank,birthdate,lastname,firstname) VALUES (79cacc5b-cc79-493b-a018-4b25c4d0dfc7,10,670646606900,'Smith','John');
 ```
+
+## Batched writes
+
+```clojure
+(ac/execute! cql-session {:batch :logged
+                          :queries [{:insert :foobar.example_table :values {:id (UUID/randomUUID)
+                                                                            :rank 11
+                                                                            :firstname "Dan"
+                                                                            :lastname "Brown"
+                                                                            :birthdate (.toEpochMilli (Instant/now))}}
+                                    {:insert :foobar.example_table :values {:id (UUID/randomUUID)
+                                                                            :rank 10
+                                                                            :firstname "John"
+                                                                            :lastname "Brown"
+                                                                            :birthdate (.toEpochMilli (Instant/now))}}
+                                    {:insert :foobar.example_table :values {:id (UUID/randomUUID)
+                                                                            :rank 9
+                                                                            :firstname "George"
+                                                                            :lastname "Brown"
+                                                                            :birthdate (.toEpochMilli (Instant/now))}}
+                                    ]})
+
+```

@@ -2,12 +2,34 @@
 
 > Alicia Dominica, known as the "Patron Saint of the Sisterhood," "Bearer of the Grail of Ages," and "Founder of the Order of the Ebon Chalice," is revered throughout the Imperium of Man as both the founder and patron Imperial Saint of the Adepta Sororitas.
 
-Alicia is a _very_ light wrapper around `com.datastax.oss/java-driver-core` driver.
-It provides a little bit of functionality to make Cassandra interactions a little friendlier in Clojure.
+Alicia is a *very* light wrapper around the Cassandra Java driver 4.x
+(`java-driver-core`). It provides a little bit of functionality to make
+Cassandra interactions a little friendlier in Clojure:
 
-## Example Usage
+- Queries are written as Clojure data with [hayt](https://github.com/mpenet/hayt/) (raw CQL strings work too)
+- Results come back as vectors of plain Clojure maps with keyword keys
+- CQL collections (list/set/map) are deeply decoded into Clojure persistent vectors/sets/maps
 
-Initialize `CqlSession` object somehow, for example like this:
+## Installation
+
+Leiningen (`project.clj`):
+
+```clojure
+[com.danboykis/alicia "0.0.1-SNAPSHOT"]
+```
+
+deps.edn:
+
+```clojure
+com.danboykis/alicia {:mvn/version "0.0.1-SNAPSHOT"}
+```
+
+## Usage
+
+### Connecting
+
+Alicia doesn't manage connections — build a `CqlSession` yourself and pass it
+in. For example:
 
 ```clojure
 (defn connect! [m]
@@ -25,64 +47,43 @@ Initialize `CqlSession` object somehow, for example like this:
     cql-session))
 ```
 
-Perform a query using [hayt](https://github.com/mpenet/hayt/)
+### Queries
+
+Perform a query using a [hayt](https://github.com/mpenet/hayt/) map:
 
 ```clojure
 (require '[alicia.core :as ac])
-(def my-config-map {.......})
-(def cql-session (connect! my-config-map))
-(first (ac/execute! cql-session {:select :system.local :columns :* :limit 1}))
 
-{:broadcast_port 7000,
- :key "local",
- :cql_version "3.4.6",
- :schema_version #uuid"54e17321-3f2e-37ca-9b08-d91ba7bdd369",
- :gossip_generation 1706191471,
- :bootstrapped "COMPLETED",
- :host_id #uuid"1ad89b8f-920c-4e2d-b7ca-736fef87c780",
- :rpc_port 9042,
- :data_center "datacenter1",
- :release_version "4.1.3",
- :broadcast_address #object[java.net.Inet4Address 0x5f76c5fc "/10.89.0.3"],
- :listen_port 7000,
- :listen_address #object[java.net.Inet4Address 0x365bb5a1 "/10.89.0.3"],
- :truncated_at {#uuid"176c39cd-b93d-33a5-a218-8eb06a56f66e" #object[java.nio.HeapByteBuffer
-                                                                    0x374b35df
-                                                                    "java.nio.HeapByteBuffer[pos=0 lim=20 cap=108]"],
-                #uuid"618f817b-005f-3678-b8a4-53f3930b8e86" #object[java.nio.HeapByteBuffer
-                                                                    0x37179c7c
-                                                                    "java.nio.HeapByteBuffer[pos=0 lim=20 cap=64]"],
-                #uuid"62efe31f-3be8-310c-8d29-8963439c1288" #object[java.nio.HeapByteBuffer
-                                                                    0x5ea7f647
-                                                                    "java.nio.HeapByteBuffer[pos=0 lim=20 cap=20]"]},
- :rpc_address #object[java.net.Inet4Address 0x353ab68f "/10.89.0.3"],
- :cluster_name "Test Cluster",
- :partitioner "org.apache.cassandra.dht.Murmur3Partitioner",
- :native_protocol_version "5",
- :tokens #{"-112218665982246025"
-           "-1183719282322278837"
-           "-2623987512224862077"
-           "-3468364159716023833"
-           "-4559661270408236093"
-           "-5655703170643174382"
-           "-7434337471466761511"
-           "-8412482923982875587"
-           "1723304671372531784"
-           "2799060552598111323"
-           "3534976245309004964"
-           "4614349052756606622"
-           "5857869058437198594"
-           "6825233301515734093"
-           "8415237854029632731"
-           "905632738760180990"},
- :rack "rack1"}
+(def cql-session (connect! my-config-map))
+
+(first (ac/execute! cql-session {:select :system.local :columns :* :limit 1}))
+;; =>
+{:key "local"
+ :cluster_name "Test Cluster"
+ :release_version "4.1.3"
+ :data_center "datacenter1"
+ :rack "rack1"
+ :host_id #uuid "1ad89b8f-920c-4e2d-b7ca-736fef87c780"
+ :partitioner "org.apache.cassandra.dht.Murmur3Partitioner"
+ :tokens #{"-112218665982246025" "-1183719282322278837" ...}
+ ...}
 ```
+
+Raw CQL strings are also accepted:
+
+```clojure
+(ac/execute! cql-session "select * from system.local limit 1")
+```
+
+### Inserts
+
+Given the following schema:
 
 ```sql
 CREATE KEYSPACE foobar
-  WITH REPLICATION = { 
-   'class' : 'SimpleStrategy', 
-   'replication_factor' : 1 
+  WITH REPLICATION = {
+   'class' : 'SimpleStrategy',
+   'replication_factor' : 1
   };
 
 CREATE TABLE foobar.example_table (
@@ -91,29 +92,49 @@ CREATE TABLE foobar.example_table (
     birthdate timestamp,
     lastname text,
     firstname text);
-
-INSERT INTO example_table (id,rank,birthdate,lastname,firstname) VALUES (79cacc5b-cc79-493b-a018-4b25c4d0dfc7,10,670646606900,'Smith','John');
 ```
 
-## Batched writes
+Write rows with hayt `:insert` maps:
 
 ```clojure
-(ac/execute! cql-session {:batch :logged
-                          :queries [{:insert :foobar.example_table :values {:id (UUID/randomUUID)
-                                                                            :rank 11
-                                                                            :firstname "Dan"
-                                                                            :lastname "Brown"
-                                                                            :birthdate (.toEpochMilli (Instant/now))}}
-                                    {:insert :foobar.example_table :values {:id (UUID/randomUUID)
-                                                                            :rank 10
-                                                                            :firstname "John"
-                                                                            :lastname "Brown"
-                                                                            :birthdate (.toEpochMilli (Instant/now))}}
-                                    {:insert :foobar.example_table :values {:id (UUID/randomUUID)
-                                                                            :rank 9
-                                                                            :firstname "George"
-                                                                            :lastname "Brown"
-                                                                            :birthdate (.toEpochMilli (Instant/now))}}
-                                    ]})
-
+(ac/execute! cql-session {:insert :foobar.example_table
+                          :values {:id (UUID/randomUUID)
+                                   :rank 11
+                                   :firstname "Dan"
+                                   :lastname "Brown"
+                                   :birthdate (.toEpochMilli (Instant/now))}})
 ```
+
+### Batched writes
+
+Wrap multiple queries in `{:batch <type> :queries [...]}`, where `<type>` is
+`:logged`, `:unlogged`, or `:counter`:
+
+```clojure
+(ac/execute! cql-session
+             {:batch :logged
+              :queries [{:insert :foobar.example_table
+                         :values {:id (UUID/randomUUID) :rank 11 :firstname "Dan" :lastname "Brown"
+                                  :birthdate (.toEpochMilli (Instant/now))}}
+                        {:insert :foobar.example_table
+                         :values {:id (UUID/randomUUID) :rank 10 :firstname "John" :lastname "Brown"
+                                  :birthdate (.toEpochMilli (Instant/now))}}
+                        {:insert :foobar.example_table
+                         :values {:id (UUID/randomUUID) :rank 9 :firstname "George" :lastname "Brown"
+                                  :birthdate (.toEpochMilli (Instant/now))}}]})
+```
+
+### Consistency level
+
+Pass `:consistency` as a keyword option to `execute!` (defaults to `:local-one`):
+
+```clojure
+(ac/execute! cql-session {:select :foobar.example_table :columns :*} :consistency :quorum)
+```
+
+Valid values: `:any`, `:one`, `:two`, `:three`, `:quorum`, `:all`,
+`:local-one`, `:local-quorum`, `:each-quorum`, `:serial`, `:local-serial`.
+
+## License
+
+Released under the [Unlicense](https://unlicense.org/). See [LICENSE](LICENSE).

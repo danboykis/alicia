@@ -1,34 +1,35 @@
 (ns alicia.core
   (:require [qbits.hayt.cql :as cql]
             [alicia.codec :as codec])
-  (:import [com.datastax.oss.driver.api.core CqlIdentifier CqlSession]
-           [com.datastax.oss.driver.api.core.cql ResultSet Row SimpleStatement]
+  (:import [com.datastax.oss.driver.api.core ConsistencyLevel CqlIdentifier CqlSession]
+           [com.datastax.oss.driver.api.core.cql BatchStatementBuilder BatchType ResultSet Row SimpleStatement Statement]
            [com.datastax.oss.driver.api.core.type DataType DataTypes ListType MapType SetType]
-           [com.datastax.oss.driver.api.core.type.codec TypeCodec TypeCodecs]
+           [com.datastax.oss.driver.api.core.type.codec ExtraTypeCodecs TypeCodec TypeCodecs]
            [java.util.function Function]))
 
 (defn- primitive-data-type->type-codec [^DataType dt]
   (cond
-    (= DataTypes/ASCII dt)      TypeCodecs/ASCII
-    (= DataTypes/BIGINT dt)     TypeCodecs/BIGINT
-    (= DataTypes/BLOB dt)       TypeCodecs/BLOB
-    (= DataTypes/BOOLEAN dt)    TypeCodecs/BOOLEAN
-    (= DataTypes/COUNTER dt)    TypeCodecs/COUNTER
-    (= DataTypes/DECIMAL dt)    TypeCodecs/DECIMAL
-    (= DataTypes/DOUBLE dt)     TypeCodecs/DOUBLE
-    (= DataTypes/FLOAT dt)      TypeCodecs/FLOAT
-    (= DataTypes/INT dt)        TypeCodecs/INT
-    (= DataTypes/TIMESTAMP dt)  TypeCodecs/TIMESTAMP
-    (= DataTypes/UUID dt)       TypeCodecs/UUID
-    (= DataTypes/VARINT dt)     TypeCodecs/VARINT
-    (= DataTypes/TIMEUUID dt)   TypeCodecs/TIMEUUID
-    (= DataTypes/INET dt)       TypeCodecs/INET
-    (= DataTypes/DATE dt)       TypeCodecs/DATE
-    (= DataTypes/TEXT dt)       TypeCodecs/TEXT
-    (= DataTypes/TIME dt)       TypeCodecs/TIME
-    (= DataTypes/SMALLINT dt)   TypeCodecs/SMALLINT
-    (= DataTypes/TINYINT dt)    TypeCodecs/TINYINT
-    (= DataTypes/DURATION dt)   TypeCodecs/DURATION))
+    (= DataTypes/ASCII dt) TypeCodecs/ASCII
+    (= DataTypes/BIGINT dt) TypeCodecs/BIGINT
+    (= DataTypes/BLOB dt) TypeCodecs/BLOB
+    (= DataTypes/BOOLEAN dt) TypeCodecs/BOOLEAN
+    (= DataTypes/COUNTER dt) TypeCodecs/COUNTER
+    (= DataTypes/DECIMAL dt) TypeCodecs/DECIMAL
+    (= DataTypes/DOUBLE dt) TypeCodecs/DOUBLE
+    (= DataTypes/FLOAT dt) TypeCodecs/FLOAT
+    (= DataTypes/INT dt) TypeCodecs/INT
+    (= DataTypes/TIMESTAMP dt) TypeCodecs/TIMESTAMP
+    (= DataTypes/UUID dt) TypeCodecs/UUID
+    (= DataTypes/VARINT dt) TypeCodecs/VARINT
+    (= DataTypes/TIMEUUID dt) TypeCodecs/TIMEUUID
+    (= DataTypes/INET dt) TypeCodecs/INET
+    (= DataTypes/DATE dt) TypeCodecs/DATE
+    (= DataTypes/TEXT dt) TypeCodecs/TEXT
+    (= DataTypes/TIME dt) TypeCodecs/TIME
+    (= DataTypes/SMALLINT dt) TypeCodecs/SMALLINT
+    (= DataTypes/TINYINT dt) TypeCodecs/TINYINT
+    (= DataTypes/DURATION dt) ExtraTypeCodecs/ZONED_TIMESTAMP_UTC
+    (= DataTypes/DURATION dt) TypeCodecs/DURATION))
 
 (defn- data-type->type-codec [^DataType dt]
   (if-let [tc (primitive-data-type->type-codec dt)]
@@ -56,10 +57,45 @@
 (defn- transform [^ResultSet rs]
   (.map rs transform-row))
 
-(defn execute! [^CqlSession s q]
-  (let [q' (cond
-             (map? q)     (cql/->raw q)
-             (string? q)  q
-             :else        (throw (IllegalArgumentException. (str "unknown query format: " (type q) " " q))))
-        ^ResultSet rs (.execute s (SimpleStatement/newInstance q'))]
+(def consistency-lookup
+  {:any ConsistencyLevel/ANY
+   :one ConsistencyLevel/ONE
+   :two ConsistencyLevel/TWO
+   :three ConsistencyLevel/THREE
+   :quorum ConsistencyLevel/QUORUM
+   :all ConsistencyLevel/ALL
+   :local-one ConsistencyLevel/LOCAL_ONE
+   :local-quorum ConsistencyLevel/LOCAL_QUORUM
+   :each-quorum ConsistencyLevel/EACH_QUORUM
+   :serial ConsistencyLevel/SERIAL
+   :local-serial ConsistencyLevel/LOCAL_SERIAL})
+
+(defn- simple-query? [query]
+  (or (map? query)
+      (string? query)))
+
+(defn- ^Statement query->stmt [query consistency]
+  (cond
+    (map? query)
+    (.setConsistencyLevel (SimpleStatement/newInstance (cql/->raw query)) consistency)
+
+    (string? query)
+    (.setConsistencyLevel (SimpleStatement/newInstance query) consistency)
+
+    (coll? query)
+    (let [stmt-builder (BatchStatementBuilder. BatchType/LOGGED)]
+      (doseq [q query]
+        (.addStatement stmt-builder (if (simple-query? q)
+                                      (query->stmt q consistency)
+                                      (throw (ex-info "invalid nested batch query" {:query query})))))
+      (.setConsistencyLevel stmt-builder consistency)
+      (.build stmt-builder))
+
+    :else
+    (throw (IllegalArgumentException. (str "unknown query format: " (type query) " " query)))))
+
+(defn execute! [^CqlSession s q & {:keys [consistency]}]
+  (let [^ResultSet rs (.execute s
+                                ^Statement (query->stmt q (get consistency-lookup
+                                                               consistency ConsistencyLevel/LOCAL_ONE)))]
     (transform rs)))

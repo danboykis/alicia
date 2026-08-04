@@ -77,3 +77,20 @@ Perform a query using [hayt](https://github.com/mpenet/hayt/)
            "905632738760180990"},
  :rack "rack1"}
 ```
+
+```sql
+CREATE KEYSPACE foobar
+  WITH REPLICATION = { 
+   'class' : 'SimpleStrategy', 
+   'replication_factor' : 1 
+  };
+
+CREATE TABLE foobar.example_table (
+    id UUID PRIMARY KEY,
+    rank int,
+    birthdate timestamp,
+    lastname text,
+    firstname text);
+
+INSERT INTO example_table (id,rank,birthdate,lastname,firstname) VALUES (79cacc5b-cc79-493b-a018-4b25c4d0dfc7,10,670646606900,'Smith','John');
+```

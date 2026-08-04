@@ -3,8 +3,8 @@
   :url "http://github.com/danboykis/alicia"
   :license {:name "Unlicense"
             :url "https://unlicense.org/"}
-  :dependencies [[org.clojure/clojure "1.11.1"]
-                 [com.datastax.oss/java-driver-core "4.17.0"]
+  :dependencies [[org.clojure/clojure "1.12.5"]
+                 [org.apache.cassandra/java-driver-core "4.19.3"]
                  [cc.qbits/hayt "4.1.0"]]
   :profiles {:dev {:source-paths ["dev"]
                    :repl-options {:init-ns user}

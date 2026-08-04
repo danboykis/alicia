@@ -2,62 +2,35 @@
   (:require [qbits.hayt.cql :as cql]
             [alicia.codec :as codec])
   (:import [com.datastax.oss.driver.api.core ConsistencyLevel CqlIdentifier CqlSession]
-           [com.datastax.oss.driver.api.core.cql BatchStatementBuilder BatchType ResultSet Row SimpleStatement Statement]
-           [com.datastax.oss.driver.api.core.type DataType DataTypes ListType MapType SetType]
-           [com.datastax.oss.driver.api.core.type.codec ExtraTypeCodecs TypeCodec TypeCodecs]
-           [java.util.function Function]))
+           [com.datastax.oss.driver.api.core.context DriverContext]
+           [com.datastax.oss.driver.api.core.cql BatchStatementBuilder BatchType ColumnDefinition ResultSet Row SimpleStatement Statement]
+           [com.datastax.oss.driver.api.core.type.codec TypeCodec]
+           [com.datastax.oss.driver.api.core.type.codec.registry CodecRegistry]))
 
-(defn- primitive-data-type->type-codec [^DataType dt]
-  (cond
-    (= DataTypes/ASCII dt) TypeCodecs/ASCII
-    (= DataTypes/BIGINT dt) TypeCodecs/BIGINT
-    (= DataTypes/BLOB dt) TypeCodecs/BLOB
-    (= DataTypes/BOOLEAN dt) TypeCodecs/BOOLEAN
-    (= DataTypes/COUNTER dt) TypeCodecs/COUNTER
-    (= DataTypes/DECIMAL dt) TypeCodecs/DECIMAL
-    (= DataTypes/DOUBLE dt) TypeCodecs/DOUBLE
-    (= DataTypes/FLOAT dt) TypeCodecs/FLOAT
-    (= DataTypes/INT dt) TypeCodecs/INT
-    (= DataTypes/TIMESTAMP dt) TypeCodecs/TIMESTAMP
-    (= DataTypes/UUID dt) TypeCodecs/UUID
-    (= DataTypes/VARINT dt) TypeCodecs/VARINT
-    (= DataTypes/TIMEUUID dt) TypeCodecs/TIMEUUID
-    (= DataTypes/INET dt) TypeCodecs/INET
-    (= DataTypes/DATE dt) TypeCodecs/DATE
-    (= DataTypes/TEXT dt) TypeCodecs/TEXT
-    (= DataTypes/TIME dt) TypeCodecs/TIME
-    (= DataTypes/SMALLINT dt) TypeCodecs/SMALLINT
-    (= DataTypes/TINYINT dt) TypeCodecs/TINYINT
-    (= DataTypes/DURATION dt) ExtraTypeCodecs/ZONED_TIMESTAMP_UTC
-    (= DataTypes/DURATION dt) TypeCodecs/DURATION))
+(defn- column-spec
+  "Returns [key codec identifier] for one column of a result set. The codec is
+  resolved from the session's codec registry (so user-registered codecs are
+  honored and tuples/UDTs work) and adapted to return Clojure collections."
+  [^CodecRegistry registry ^ColumnDefinition cd]
+  (let [cql-type (.getType cd)
+        id       (.getName cd)]
+    [(keyword (.asInternal id))
+     (codec/clojure-codec cql-type (.codecFor registry cql-type))
+     id]))
 
-(defn- data-type->type-codec [^DataType dt]
-  (if-let [tc (primitive-data-type->type-codec dt)]
-    tc
-    (cond
-      (instance? MapType dt)  (codec/map-of   (primitive-data-type->type-codec (.getKeyType ^MapType dt))
-                                              (primitive-data-type->type-codec (.getValueType ^MapType dt)))
+(defn- transform
+  "Maps each row of rs to a Clojure map. The column
+  codecs are computed once per result set rather than once per row."
+  [^CodecRegistry registry ^ResultSet rs]
+  (let [cols (mapv #(column-spec registry %) (.getColumnDefinitions rs))
+        process-row (fn [^Row row]
+                      (into {}
+                            (map (fn [[k ^TypeCodec tc ^CqlIdentifier id]]
+                                   [k (.get row id tc)]))
+                            cols))]
+    (into [] (map process-row) rs)))
 
-      (instance? SetType dt)  (codec/set-of   (primitive-data-type->type-codec (.getElementType ^SetType dt)))
-
-      (instance? ListType dt) (codec/list-of  (primitive-data-type->type-codec (.getElementType ^ListType dt)))
-
-      :else (throw (IllegalArgumentException. (str "unknown data type: " dt))))))
-
-(def ^:private transform-row
-  (reify Function
-    (apply [_ row]
-      (into {}
-            (comp
-              (map (fn [cd] [(.getName cd) (.getType cd)]))
-              (map (fn [[n t]] [(keyword (.asInternal n))
-                                (.get ^Row row ^CqlIdentifier n ^TypeCodec (data-type->type-codec t))])))
-            (.getColumnDefinitions ^Row row)))))
-
-(defn- transform [^ResultSet rs]
-  (.map rs transform-row))
-
-(def consistency-lookup
+(def ^:private consistency-lookup
   {:any ConsistencyLevel/ANY
    :one ConsistencyLevel/ONE
    :two ConsistencyLevel/TWO
@@ -95,7 +68,6 @@
     (throw (IllegalArgumentException. (str "unknown query format: " (type query) " " query)))))
 
 (defn execute! [^CqlSession s q & {:keys [consistency]}]
-  (let [^ResultSet rs (.execute s
-                                ^Statement (query->stmt q (get consistency-lookup
-                                                               consistency ConsistencyLevel/LOCAL_ONE)))]
-    (transform rs)))
+  (let [^ResultSet rs (.execute s (query->stmt q (get consistency-lookup
+                                                      consistency ConsistencyLevel/LOCAL_ONE)))]
+    (transform (.getCodecRegistry ^DriverContext (.getContext s)) rs)))

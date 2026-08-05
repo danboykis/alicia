@@ -1,5 +1,6 @@
 (ns alicia.core
   (:require [qbits.hayt.cql :as cql]
+            [alicia.connect :as conn]
             [alicia.codec :as codec])
   (:import [com.datastax.oss.driver.api.core ConsistencyLevel CqlIdentifier CqlSession]
            [com.datastax.oss.driver.api.core.context DriverContext]
@@ -52,6 +53,13 @@
   (or (map? query)
       (string? query)))
 
+(defmacro ^:private set-consistency! [stmt consistency]
+  `(let [stmt# ~stmt
+         consistency# ~consistency]
+     (if consistency#
+       (.setConsistencyLevel stmt# (get consistency-lookup consistency#))
+       stmt#)))
+
 (defn- ^Statement query->stmt [query consistency]
   (cond
     (and (map? query)
@@ -63,19 +71,22 @@
         (.addStatement stmt-builder (if (simple-query? q)
                                       (query->stmt q consistency)
                                       (throw (ex-info "invalid nested batch query" {:query query})))))
-      (.setConsistencyLevel stmt-builder consistency)
+      (set-consistency! stmt-builder consistency)
       (.build stmt-builder))
 
     (map? query)
-    (.setConsistencyLevel (SimpleStatement/newInstance (cql/->raw query)) consistency)
+    (set-consistency! (SimpleStatement/newInstance (cql/->raw query)) consistency)
 
     (string? query)
-    (.setConsistencyLevel (SimpleStatement/newInstance query) consistency)
+    (set-consistency! (SimpleStatement/newInstance query) consistency)
 
     :else
     (throw (IllegalArgumentException. (str "unknown query format: " (type query) " " query)))))
 
 (defn execute! [^CqlSession s q & {:keys [consistency]}]
-  (let [^ResultSet rs (.execute s (query->stmt q (get consistency-lookup
-                                                      consistency ConsistencyLevel/LOCAL_ONE)))]
-    (transform (.getCodecRegistry ^DriverContext (.getContext s)) rs)))
+  (if (and (some? consistency) (not (contains? consistency-lookup consistency)))
+    (throw (ex-info "invalid consistency level" {:consistency consistency}))
+    (let [^ResultSet rs (.execute s (query->stmt q consistency))]
+      (transform (.getCodecRegistry ^DriverContext (.getContext s)) rs))))
+
+(def connect! conn/connect-remote!)

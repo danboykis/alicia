@@ -343,9 +343,7 @@
    :reconnect-base-delay     [500 :millis]
    :reconnect-max-delay      [30 :seconds]
    :heartbeat-interval       [30 :seconds]
-   :heartbeat-timeout        [5 :seconds]
-   :ssl-engine-factory-class "DefaultSslEngineFactory"
-   :ssl-hostname-validation  false})
+   :heartbeat-timeout        [5 :seconds]})
 
 (defn connect-remote!
   [{:keys [username password keyspace hosts port config]

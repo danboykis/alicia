@@ -28,23 +28,56 @@ com.danboykis/alicia {:mvn/version "0.0.1-SNAPSHOT"}
 
 ### Connecting
 
-Alicia doesn't manage connections — build a `CqlSession` yourself and pass it
-in. For example:
+`connect!` builds a `CqlSession` from a plain map and returns it under
+`:session`:
 
 ```clojure
-(defn connect! [m]
-  (let [{{username :username password :password} :credentials
-         keyspace :keyspace hosts :hosts port :port dc :dc driver-conf :driver-config} m
-        ^CqlSession cql-session (-> (CqlSession/builder)
-                                    (.withConfigLoader (DriverConfigLoader/fromString driver-conf))
-                                    (.withAuthCredentials username password)
-                                    (.addContactEndPoints (into []
-                                                                (map #(DefaultEndPoint. (InetSocketAddress. ^String % ^int port)))
-                                                                hosts))
-                                    (.withLocalDatacenter dc)
-                                    (.withKeyspace ^String keyspace)
-                                    (.build))]
-    cql-session))
+(require '[alicia.core :as ac])
+
+(def conn (ac/connect! {:hosts    ["cassandra.example.com"]
+                        :port     9042          ; optional, defaults to 9042
+                        :username "cassandra"
+                        :password "cassandra"
+                        :keyspace "foobar"
+                        :config   {:local-datacenter "datacenter1"}}))
+
+(:session conn) ; => com.datastax.oss.driver.api.core.CqlSession
+```
+
+Any `CqlSession` works with `execute!`, so you can still build one yourself if
+you need full control.
+
+#### Driver configuration
+
+The `:config` map is kebab-case keywords over the driver's options. It is
+merged over these defaults:
+
+```clojure
+{:request-consistency      :local-one
+ :request-timeout          [3 :seconds]
+ :request-idempotent       true
+ :connect-timeout          [5 :seconds]
+ :init-query-timeout       [5 :seconds]
+ :set-keyspace-timeout     [5 :seconds]
+ :pool-local-size          1
+ :reconnect-base-delay     [500 :millis]
+ :reconnect-max-delay      [30 :seconds]
+ :heartbeat-interval       [30 :seconds]
+ :heartbeat-timeout        [5 :seconds]
+ :ssl-engine-factory-class "DefaultSslEngineFactory"
+ :ssl-hostname-validation  false}
+```
+
+`:local-datacenter` is required. Unknown keys throw `ex-info` with
+the list of valid options.
+
+See [datastax docs](https://docs.datastax.com/en/drivers/java/4.17/com/datastax/oss/driver/api/core/config/DefaultDriverOption.html) for all the possible options.
+
+```clojure
+:config {:local-datacenter    "dc1"
+         :request-consistency :local-quorum
+         :request-timeout     [3 :seconds]
+         :pool-local-size     4}
 ```
 
 ### Queries
@@ -54,7 +87,7 @@ Perform a query using a [hayt](https://github.com/mpenet/hayt/) map:
 ```clojure
 (require '[alicia.core :as ac])
 
-(def cql-session (connect! my-config-map))
+(def cql-session (:session (ac/connect! my-config-map)))
 
 (first (ac/execute! cql-session {:select :system.local :columns :* :limit 1}))
 ;; =>
